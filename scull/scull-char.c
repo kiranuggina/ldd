@@ -4,10 +4,14 @@
 #include <linux/version.h>
 #include <linux/device.h>
 #include <linux/cdev.h>
+#include <linux/uaccess.h>
 
 static unsigned int major; /* major number for device */
 static struct class *scull_class;
 static struct cdev scull_cdev[4];
+
+static char   message[256] = {0};           ///< Memory for the string that is passed from userspace
+static short  size_of_message;              ///< Used to remember the size of the string stored
 
 
 int scull_open(struct inode * inode, struct file * filp)
@@ -22,18 +26,29 @@ int scull_release(struct inode * inode, struct file * filp)
     return 0;
 }
 
-ssize_t scull_read (struct file *filp, char __user * buf, size_t count,
-                                loff_t * offset)
+ssize_t scull_read (struct file *filp, char __user * buf, size_t count, loff_t * offset)
 {
-    pr_info("Nothing to read guy\n");
+    int error_count = 0;
+    // copy_to_user has the format ( * to, *from, size) and returns 0 on success
+    error_count = copy_to_user(buf, message, size_of_message);
+
+    if (error_count==0){            // if true then have success
+        pr_info("scull_char: Sent %d characters to the user\n", size_of_message);
+    return (size_of_message=0);  // clear the position to the start and return 0
+    }
+    else {
+        pr_info("scull_char: Failed to send %d characters to the user\n", error_count);
+    return -EFAULT;              // Failed -- return a bad address message (i.e. -14)
+    }
     return 0;
 }
 
 
-ssize_t scull_write(struct file * filp, const char __user * buf, size_t count,
-                                loff_t * offset)
+ssize_t scull_write(struct file * filp, const char __user * buf, size_t count, loff_t * offset)
 {
-    pr_info("Can't accept any data guy\n");
+    sprintf(message, "%s(%zu letters)", buf, count);   // appending received string with its length
+    size_of_message = strlen(message);                 // store the length of the stored message
+    pr_info("scull_char: Received %zu characters from the user\n", count);
     return count;
 }
 
