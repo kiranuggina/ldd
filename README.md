@@ -1,2 +1,2 @@
 # ldd
-linux device drivers with latest kernel
+linux device drivers examples.
