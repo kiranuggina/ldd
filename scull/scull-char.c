@@ -5,17 +5,19 @@
 #include <linux/device.h>
 #include <linux/cdev.h>
 #include <linux/uaccess.h>
+#include "scull.h"
 
 static unsigned int major; /* major number for device */
 static struct class *scull_class;
-static struct cdev scull_cdev[4];
 
-static char   message[256] = {0};           ///< Memory for the string that is passed from userspace
-static short  size_of_message;              ///< Used to remember the size of the string stored
-
+struct  scull_dev my_scull[4];
 
 int scull_open(struct inode * inode, struct file * filp)
 {
+    struct scull_dev *dev; /* device information */
+
+    dev = container_of(inode->i_cdev, struct scull_dev, cdev);
+    filp->private_data = dev; /* for other methods */
     pr_info("Someone tried to open me\n");
     return 0;
 }
@@ -28,13 +30,14 @@ int scull_release(struct inode * inode, struct file * filp)
 
 ssize_t scull_read (struct file *filp, char __user * buf, size_t count, loff_t * offset)
 {
+    struct scull_dev *dev = filp->private_data;
     int error_count = 0;
     // copy_to_user has the format ( * to, *from, size) and returns 0 on success
-    error_count = copy_to_user(buf, message, size_of_message);
+    error_count = copy_to_user(buf, dev->message, dev->size_of_message);
 
     if (error_count==0){            // if true then have success
-        pr_info("scull_char: Sent %d characters to the user\n", size_of_message);
-    return (size_of_message=0);  // clear the position to the start and return 0
+        pr_info("scull_char: Sent %d characters to the user\n", dev->size_of_message);
+        return (dev->size_of_message=0);  // clear the position to the start and return 0
     }
     else {
         pr_info("scull_char: Failed to send %d characters to the user\n", error_count);
@@ -46,13 +49,18 @@ ssize_t scull_read (struct file *filp, char __user * buf, size_t count, loff_t *
 
 ssize_t scull_write(struct file * filp, const char __user * buf, size_t count, loff_t * offset)
 {
-    sprintf(message, "%s(%zu letters)", buf, count);   // appending received string with its length
-    size_of_message = strlen(message);                 // store the length of the stored message
+    struct scull_dev *dev = filp->private_data;
+    //sprintf(message, "%s(%zu letters)", buf, count);   // appending received string with its length
+    if(copy_from_user(dev->message,buf,count)){
+        return -EFAULT;
+    }
+    dev->size_of_message = strlen(dev->message);                 // store the length of the stored message
     pr_info("scull_char: Received %zu characters from the user\n", count);
     return count;
 }
 
 struct file_operations scull_fops = {
+    owner:      THIS_MODULE,
     open:       scull_open,
     release:    scull_release,
     read:       scull_read,
@@ -83,17 +91,17 @@ static int __init scull_char_init_module(void)
 
     for(i=0;i<4;i++){
         /* Initialize the char device and tie a file_operations to it */
-        cdev_init(&scull_cdev[i], &scull_fops);
-        scull_cdev[i].owner = THIS_MODULE;
+        cdev_init(&my_scull[i].cdev, &scull_fops);
+        my_scull[i].cdev.owner = THIS_MODULE;
         /* Now make the device live for the users to access */
-        cdev_add(&scull_cdev[i], MKDEV(MAJOR(devt),MINOR(devt)+i), 1);
+        cdev_add(&my_scull[i].cdev, MKDEV(MAJOR(devt),MINOR(devt)+i), 1);
 
         if (IS_ERR(device_create(scull_class,NULL,MKDEV(MAJOR(devt),MINOR(devt)+i),NULL,"scull_char%d",i))) {
             pr_err("Error creating scull char device.\n");
             for(j=0;j<i;j++)
             {
                 device_destroy(scull_class,MKDEV(MAJOR(devt),MINOR(devt)+j));
-                cdev_del(&scull_cdev[j]);
+                cdev_del(&my_scull[j].cdev);
             }
             class_destroy(scull_class);
             unregister_chrdev_region(devt, 1);
@@ -112,7 +120,7 @@ static void __exit scull_char_cleanup_module(void)
     for(i=0;i<4;i++)
     {
         device_destroy(scull_class, MKDEV(major, i));
-        cdev_del(&scull_cdev[i]);
+        cdev_del(&my_scull[i].cdev);
     }
     class_destroy(scull_class);
 
